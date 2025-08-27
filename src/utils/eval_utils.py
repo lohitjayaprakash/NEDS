@@ -80,6 +80,7 @@ def load_model_data_local(**kwargs):
     static_mods = kwargs["static_mods"]
     dynamic_mods = kwargs["dynamic_mods"]
     search = kwargs.get("search", False)
+    aligned_data_dir = kwargs.get("aligned_data_dir", None)
 
     num_sessions = kwargs["num_sessions"] if "num_sessions" in kwargs else 1
 
@@ -104,7 +105,8 @@ def load_model_data_local(**kwargs):
         split_method="predefined",
         test_session_eid=[],
         batch_size=config.training.train_batch_size,
-        seed=config.seed
+        seed=config.seed,
+        aligned_data_dir=aligned_data_dir
     )
 
     logger.info(meta_data)
@@ -170,6 +172,7 @@ def load_model_data_local(**kwargs):
     _, _, dataset, meta_data = load_ibl_dataset(
         config.dirs.dataset_cache_dir, 
         config.dirs.huggingface_org,
+        aligned_data_dir=aligned_data_dir,
         num_sessions=1,
         eid = eid,
         use_re=True,
@@ -230,6 +233,17 @@ def co_smoothing_eval(
     target_regions = kwargs["target_regions"]
 
     N = sum(batch["space_attn_mask"][0] != 0)
+    print(f"DEBUG: N (number of neurons) = {N}")
+    print(f"DEBUG: batch keys = {batch.keys()}")
+    print(f"DEBUG: space_attn_mask shape = {batch['space_attn_mask'].shape}")
+    print(f"DEBUG: space_attn_mask[0] = {batch['space_attn_mask'][0]}")
+    if 'spikes_data' in batch:
+        print(f"DEBUG: spikes_data shape = {batch['spikes_data'].shape}")
+        print(f"DEBUG: spikes_data type = {type(batch['spikes_data'])}")
+        # If space_attn_mask is empty but spikes_data has neurons, use spikes_data shape
+        if N == 0 and len(batch['spikes_data'].shape) >= 3:
+            N = batch['spikes_data'].shape[2]  # Number of neurons from spikes_data
+            print(f"DEBUG: Using spikes_data shape for N = {N}")
         
     uuids_list = np.array(test_dataset["cluster_uuids"][0])[:N]
     region_list = np.array(test_dataset["cluster_regions"])[0][:N]
@@ -527,6 +541,18 @@ def co_smoothing_eval(
             mode = f"eval_spike_{'_'.join(kwargs['enc_task_var'])}"
         else:
             mode = f"eval_spike_{kwargs['enc_task_var']}"
+
+    # Safety check for empty results
+    if len(r2_all) == 0 or r2_all.ndim == 1:
+        print(f"Warning: r2_all has unexpected shape: {r2_all.shape}")
+        print(f"r2_result_list length: {len(r2_result_list)}")
+        print(f"N (number of neurons): {N}")
+        
+        return {
+            f"{mode}_mean_bps": bps_mean,
+            f"{mode}_mean_r2_psth": np.nan,
+            f"{mode}_mean_r2_trial": np.nan,
+        }
 
     return {
         f"{mode}_mean_bps": bps_mean,

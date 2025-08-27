@@ -1,0 +1,43 @@
+# Python requirements extracted from env.yaml
+# Note: Python version 3.10.8 is specified in the original env.yaml
+
+# Core scientific computing
+numpy==1.26.4
+pandas
+scipy
+scikit-learn
+
+# Visualization
+matplotlib
+seaborn
+
+# Utilities
+tqdm
+
+# Machine Learning and Deep Learning
+# --extra-index-url https://download.pytorch.org/whl/cu118
+# torch==2.2.1
+# torchvision==0.17.1
+transformers==4.38.2
+accelerate==0.27.2
+datasets==2.17.1
+timm==0.9.16
+torcheval==0.0.7
+einops
+
+# Distributed computing
+# ray[default]
+
+# Experiment tracking
+wandb
+
+# IBL-specific packages
+ONE-api
+iblutil
+iblatlas
+ibllib
+ibl-neuropixel
+spikeinterface
+
+# Local package in editable mode
+-e ./src

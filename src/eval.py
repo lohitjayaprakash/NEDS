@@ -24,6 +24,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--eid", type=str, default="EXAMPLE_EID")
 ap.add_argument("--base_path", type=str, default="EXAMPLE_PATH")
 ap.add_argument("--data_path", type=str, default="EXAMPLE_PATH")
+ap.add_argument("--aligned_data_dir", type=str, default=None, help="Path to aligned data directory")
 ap.add_argument("--num_sessions", type=int, default=1)
 ap.add_argument("--model_mode", type=str, default="mm")
 ap.add_argument("--mask_mode", type=str, default="temporal")
@@ -197,6 +198,7 @@ for ckpt_path in best_ckpt_path:
         "modal_filter": modal_filter,
         "model_mode": model_mode,
         "data_path": args.data_path,
+        "aligned_data_dir": args.aligned_data_dir,
     }      
     model, accelerator, dataset, dataloader = load_model_data_local(**configs)
     model_state_dict = model.state_dict()
@@ -303,6 +305,7 @@ if (args.enc_task_var == "random"):
             "modal_filter": modal_filter,
             "model_mode": model_mode,
             "data_path": args.data_path,
+            "aligned_data_dir": args.aligned_data_dir,
         }      
         model, accelerator, dataset, dataloader = load_model_data_local(**configs)
 

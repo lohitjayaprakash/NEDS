@@ -1,4 +1,5 @@
 import os
+import sys
 import wandb
 import pickle
 import logging
@@ -12,9 +13,14 @@ from torch.optim.lr_scheduler import OneCycleLR, LinearLR
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
 
-import ray
-from ray import tune, train
-from ray.tune.schedulers import ASHAScheduler
+try:
+    import ray
+    from ray import tune, train
+    from ray.tune.schedulers import ASHAScheduler
+    RAY_AVAILABLE = True
+except ImportError:
+    RAY_AVAILABLE = False
+    print("Ray not available. Hyperparameter search will be disabled.")
 
 from utils.utils import set_seed, dummy_load
 from utils.dataset_utils import load_ibl_dataset
@@ -147,6 +153,7 @@ def main(tune_config=None):
     train_dataset, val_dataset, test_dataset, meta_data = load_ibl_dataset(
         args.data_path, 
         config.dirs.huggingface_org,
+        aligned_data_dir=args.aligned_data_dir,
         num_sessions=args.num_sessions,
         eid = eid if args.num_sessions == 1 else None,
         use_re=True,
@@ -433,6 +440,7 @@ if __name__ == "__main__":
     ap.add_argument("--eid", type=str, default="EXAMPLE_EID")
     ap.add_argument("--base_path", type=str, default="EXAMPLE_PATH")
     ap.add_argument("--data_path", type=str, default="EXAMPLE_PATH")
+    ap.add_argument("--aligned_data_dir", type=str, default=None)
     ap.add_argument("--num_sessions", type=int, default=1)
     ap.add_argument("--model_mode", type=str, default="mm")
     ap.add_argument("--mask_mode", type=str, default="temporal")
@@ -463,6 +471,10 @@ if __name__ == "__main__":
         logging.info("Deterministic mode is activated. This will negatively impact performance.")
         
     if args.search:
+        if not RAY_AVAILABLE:
+            logging.error("Ray is not available. Cannot perform hyperparameter search.")
+            sys.exit(1)
+            
         ray.init(address="auto")  
         search_space = {
             "learning_rate": tune.loguniform(1e-4, 1e-3),

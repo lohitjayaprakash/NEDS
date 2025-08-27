@@ -28,6 +28,86 @@ def globalize(func):
   return result
 
 
+def _load_behavior_worker(args):
+    """Worker function for multiprocessing behavior loading"""
+    beh, one, eid = args
+    return beh, load_target_behavior(one, eid, beh)
+
+
+def _compute_spike_count_worker(args):
+    """Worker function for multiprocessing spike count computation"""
+    interval, times, clusters, cluster_ids, n_clusters_in_region, n_bins, binsize = args
+    interval_idx, t_beg, t_end = interval
+    
+    idxs_t = (times >= t_beg) & (times < t_end)
+    times_curr = times[idxs_t]
+    clust_curr = clusters[idxs_t]
+    
+    if times_curr.shape[0] == 0:
+        # no spikes in this trial
+        binned_spikes_tmp = np.zeros((n_clusters_in_region, n_bins))
+        if np.isnan(t_beg) or np.isnan(t_end):
+            t_idxs = np.nan * np.ones(n_bins)
+        else:
+            t_idxs = np.arange(t_beg, t_end + binsize / 2, binsize)
+        idxs_tmp = np.arange(n_clusters_in_region)
+    else:
+        # bin spikes
+        binned_spikes_tmp, t_idxs, cluster_idxs = bincount2D(
+            times_curr, clust_curr, xbin=binsize, xlim=[t_beg, t_end])
+        # find indices of clusters that returned spikes for this trial
+        _, idxs_tmp, _ = np.intersect1d(cluster_ids, cluster_idxs, return_indices=True)
+    
+    return binned_spikes_tmp[:, :n_bins], idxs_tmp, interval_idx
+
+
+def _interpolate_behavior_worker(args):
+    """Worker function for multiprocessing behavior interpolation"""
+    target, interval_begs, interval_ends, allow_nans, binsize, interval_len = args
+    # We use interval_idx to track the interval order while working with p.imap_unordered()
+    interval_idx, target_time, target_vals = target
+
+    is_good_interval, x_interp, y_interp = False, None, None
+    
+    if len(target_vals) == 0:
+        skip_reason = "target data not present"
+        return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
+    if np.sum(np.isnan(target_vals)) > 0 and not allow_nans:
+        skip_reason = "nans in target data"
+        return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
+    if np.isnan(interval_begs[interval_idx]) or np.isnan(interval_ends[interval_idx]):
+        skip_reason = "bad interval data"
+        return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
+    if np.abs(interval_begs[interval_idx] - target_time[0]) > binsize:
+        skip_reason = "target data starts too late"
+        return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
+    if np.abs(interval_ends[interval_idx] - target_time[-1]) > binsize:
+        skip_reason = "target data ends too early"
+        return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
+
+    is_good_interval, skip_reason = True, None
+    n_bins = int(np.ceil(interval_len / binsize))
+    x_interp = np.linspace(
+        interval_begs[interval_idx] + binsize, interval_ends[interval_idx], n_bins
+    )
+    if len(target_vals.shape) > 1 and target_vals.shape[1] > 1:
+        n_dims = target_vals.shape[1]
+        y_interp_tmps = []
+        for n in range(n_dims):
+            y_interp_tmps.append(
+                interp1d(
+                    target_time, target_vals[:, n], kind="linear", fill_value="extrapolate"
+                )(x_interp)
+            )
+        y_interp = np.hstack([y[:, None] for y in y_interp_tmps])
+    else:
+        y_interp = interp1d(
+            target_time, target_vals, kind="linear", fill_value="extrapolate"
+        )(x_interp)
+    
+    return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
+
+
 def load_spiking_data(one, pid, compute_metrics=False, qc=None, **kwargs):
     eid = kwargs.pop("eid", "")
     pname = kwargs.pop("pname", "")
@@ -175,37 +255,41 @@ def get_spike_data_per_interval(
     cluster_ids = np.unique(clusters)
     n_clusters_in_region = len(cluster_ids)
 
-    @globalize
-    def compute_spike_count(interval):
-        interval_idx, t_beg, t_end = interval
-        idxs_t = (times >= t_beg) & (times < t_end)
-        times_curr = times[idxs_t]
-        clust_curr = clusters[idxs_t]
-        if times_curr.shape[0] == 0:
-            # no spikes in this trial
-            binned_spikes_tmp = np.zeros((n_clusters_in_region, n_bins))
-            if np.isnan(t_beg) or np.isnan(t_end):
-                t_idxs = np.nan * np.ones(n_bins)
-            else:
-                t_idxs = np.arange(t_beg, t_end + binsize / 2, binsize)
-            idxs_tmp = np.arange(n_clusters_in_region)
-        else:
-            # bin spikes
-            binned_spikes_tmp, t_idxs, cluster_idxs = bincount2D(
-                times_curr, clust_curr, xbin=binsize, xlim=[t_beg, t_end])
-            # find indices of clusters that returned spikes for this trial
-            _, idxs_tmp, _ = np.intersect1d(cluster_ids, cluster_idxs, return_indices=True)
-        return binned_spikes_tmp[:, :n_bins], idxs_tmp, interval_idx
-
     binned_spikes = np.zeros((n_intervals, n_clusters_in_region, n_bins))
-    with multiprocessing.Pool(processes=n_workers) as p:
+    
+    if n_workers == 1:
+        # Sequential processing for single worker to avoid multiprocessing issues
         intervals = list(zip(np.arange(n_intervals), interval_begs, interval_ends))
-        with tqdm(total=len(intervals)) as pbar:
-            for res in p.imap_unordered(compute_spike_count, intervals):
-                pbar.update()
-                binned_spikes[res[-1], res[1], :] += res[0]
-        pbar.close()
-        p.close()
+        for interval in tqdm(intervals):
+            interval_idx, t_beg, t_end = interval
+            idxs_t = (times >= t_beg) & (times < t_end)
+            times_curr = times[idxs_t]
+            clust_curr = clusters[idxs_t]
+            
+            if times_curr.shape[0] == 0:
+                # no spikes in this trial
+                binned_spikes_tmp = np.zeros((n_clusters_in_region, n_bins))
+                idxs_tmp = np.arange(n_clusters_in_region)
+            else:
+                # bin spikes
+                binned_spikes_tmp, t_idxs, cluster_idxs = bincount2D(
+                    times_curr, clust_curr, xbin=binsize, xlim=[t_beg, t_end])
+                # find indices of clusters that returned spikes for this trial
+                _, idxs_tmp, _ = np.intersect1d(cluster_ids, cluster_idxs, return_indices=True)
+            
+            binned_spikes[interval_idx, idxs_tmp, :] += binned_spikes_tmp[:, :n_bins]
+    else:
+        # Prepare arguments for worker function
+        intervals = list(zip(np.arange(n_intervals), interval_begs, interval_ends))
+        worker_args = [(interval, times, clusters, cluster_ids, n_clusters_in_region, n_bins, binsize) for interval in intervals]
+
+        with multiprocessing.Pool(processes=n_workers) as p:
+            with tqdm(total=len(intervals)) as pbar:
+                for res in p.imap_unordered(_compute_spike_count_worker, worker_args):
+                    pbar.update()
+                    binned_spikes[res[-1], res[1], :] += res[0]
+            pbar.close()
+            p.close()
     return binned_spikes
 
 
@@ -412,60 +496,64 @@ def get_behavior_per_interval(
     good_interval = [None for _ in range(len(target_times_og_list))]
     skip_reasons = [None for _ in range(len(target_times_og_list))]
 
-    @globalize
-    def interpolate_behavior(target):
-        # We use interval_idx to track the interval order while working with p.imap_unordered()
-        interval_idx, target_time, target_vals = target
-
-        is_good_interval, x_interp, y_interp = False, None, None
-        
-        if len(target_vals) == 0:
-            skip_reason = "target data not present"
-            return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
-        if np.sum(np.isnan(target_vals)) > 0 and not allow_nans:
-            skip_reason = "nans in target data"
-            return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
-        if np.isnan(interval_begs[interval_idx]) or np.isnan(interval_ends[interval_idx]):
-            skip_reason = "bad interval data"
-            return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
-        if np.abs(interval_begs[interval_idx] - target_time[0]) > binsize:
-            skip_reason = "target data starts too late"
-            return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
-        if np.abs(interval_ends[interval_idx] - target_time[-1]) > binsize:
-            skip_reason = "target data ends too early"
-            return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
-
-        is_good_interval, skip_reason = True, None
-        x_interp = np.linspace(
-            interval_begs[interval_idx] + binsize, interval_ends[interval_idx], n_bins
-        )
-        if len(target_vals.shape) > 1 and target_vals.shape[1] > 1:
-            n_dims = target_vals.shape[1]
-            y_interp_tmps = []
-            for n in range(n_dims):
-                y_interp_tmps.append(
-                    interp1d(
-                        target_time, target_vals[:, n], kind="linear", fill_value="extrapolate"
-                    )(x_interp)
-                )
-            y_interp = np.hstack([y[:, None] for y in y_interp_tmps])
-        else:
-            y_interp = interp1d(
-                target_time, target_vals, kind="linear", fill_value="extrapolate"
-            )(x_interp)
-        return interval_idx, is_good_interval, x_interp, y_interp, skip_reason
-
-    with multiprocessing.Pool(processes=n_workers) as p:
+    if n_workers == 1:
+        # Sequential processing for single worker to avoid multiprocessing issues
         targets = list(zip(np.arange(n_intervals), target_times_og_list, target_vals_og_list))
-        with tqdm(total=n_intervals) as pbar:
-            for res in p.imap_unordered(interpolate_behavior, targets):
-                pbar.update()
-                good_interval[res[0]] = res[1]
-                target_times_list[res[0]] = res[2]
-                target_vals_list[res[0]] = res[3]
-                skip_reasons[res[0]] = res[-1]
-        pbar.close()
-        p.close()
+        for target in tqdm(targets):
+            interval_idx, target_time, target_vals = target
+            
+            is_good_interval, x_interp, y_interp = False, None, None
+            
+            if len(target_vals) == 0:
+                skip_reason = "target data not present"
+            elif np.sum(np.isnan(target_vals)) > 0 and not allow_nans:
+                skip_reason = "nans in target data"
+            elif np.isnan(interval_begs[interval_idx]) or np.isnan(interval_ends[interval_idx]):
+                skip_reason = "bad interval data"
+            elif np.abs(interval_begs[interval_idx] - target_time[0]) > binsize:
+                skip_reason = "target data starts too late"
+            elif np.abs(interval_ends[interval_idx] - target_time[-1]) > binsize:
+                skip_reason = "target data ends too early"
+            else:
+                is_good_interval, skip_reason = True, None
+                n_bins = int(np.ceil(interval_len / binsize))
+                x_interp = np.linspace(
+                    interval_begs[interval_idx] + binsize, interval_ends[interval_idx], n_bins
+                )
+                if len(target_vals.shape) > 1 and target_vals.shape[1] > 1:
+                    n_dims = target_vals.shape[1]
+                    y_interp_tmps = []
+                    for n in range(n_dims):
+                        y_interp_tmps.append(
+                            interp1d(
+                                target_time, target_vals[:, n], kind="linear", fill_value="extrapolate"
+                            )(x_interp)
+                        )
+                    y_interp = np.hstack([y[:, None] for y in y_interp_tmps])
+                else:
+                    y_interp = interp1d(
+                        target_time, target_vals, kind="linear", fill_value="extrapolate"
+                    )(x_interp)
+            
+            good_interval[interval_idx] = is_good_interval
+            target_times_list[interval_idx] = x_interp
+            target_vals_list[interval_idx] = y_interp
+            skip_reasons[interval_idx] = skip_reason
+    else:
+        # Prepare arguments for worker function
+        targets = list(zip(np.arange(n_intervals), target_times_og_list, target_vals_og_list))
+        worker_args = [(target, interval_begs, interval_ends, allow_nans, binsize, interval_len) for target in targets]
+
+        with multiprocessing.Pool(processes=n_workers) as p:
+            with tqdm(total=n_intervals) as pbar:
+                for res in p.imap_unordered(_interpolate_behavior_worker, worker_args):
+                    pbar.update()
+                    good_interval[res[0]] = res[1]
+                    target_times_list[res[0]] = res[2]
+                    target_vals_list[res[0]] = res[3]
+                    skip_reasons[res[0]] = res[-1]
+            pbar.close()
+            p.close()
     return target_times_list, target_vals_list, np.array(good_interval), skip_reasons    
 
 
@@ -483,18 +571,24 @@ def load_anytime_behaviors(one, eid, n_workers=os.cpu_count()):
         # "lightning-pose-left-pupil-diameter", 
         # "lightning-pose-right-pupil-diameter"
     ]
-    @globalize
-    def load_beh(beh):
-        return beh, load_target_behavior(one, eid, beh)
     
     behave_dict = {}
-    with multiprocessing.Pool(processes=n_workers) as p:
-        with tqdm(total=len(behaviors)) as pbar:
-            for res in p.imap_unordered(load_beh, behaviors):
-                pbar.update()
-                behave_dict.update({res[0]: res[1]})
-        pbar.close()
-        p.close()
+    
+    if n_workers == 1:
+        # Sequential processing for single worker to avoid multiprocessing issues
+        for beh in tqdm(behaviors):
+            behave_dict[beh] = load_target_behavior(one, eid, beh)
+    else:
+        # Prepare arguments for worker function
+        worker_args = [(beh, one, eid) for beh in behaviors]
+        
+        with multiprocessing.Pool(processes=n_workers) as p:
+            with tqdm(total=len(behaviors)) as pbar:
+                for res in p.imap_unordered(_load_behavior_worker, worker_args):
+                    pbar.update()
+                    behave_dict.update({res[0]: res[1]})
+            pbar.close()
+            p.close()
     return behave_dict
 
 

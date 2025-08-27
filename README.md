@@ -4,6 +4,16 @@ We introduce a multimodal, multi-task model that enables simultaneous [Neural En
 
 ![NEDS](assets/neds_schematic.png)
 
+## 📚 Documentation
+
+- **[Technical Guide](TECHNICAL_GUIDE.md)** - Comprehensive usage instructions, configuration options, and troubleshooting
+- **[Architecture Overview](ARCHITECTURE.md)** - Detailed model architecture, innovations, and design principles  
+- **[Data Flow Documentation](DATA_FLOW.md)** - Complete data processing pipeline with visual diagrams
+
+## 🚀 Quick Start
+
+For detailed installation and usage instructions, see the [Technical Guide](TECHNICAL_GUIDE.md).
+
 ## Installation
 
 ```bash
@@ -78,6 +88,20 @@ sbatch eval.sh 10 EID finetune mm 0.1 random False # Eval a pre-trained model fi
 sbatch eval.sh 1 EID train mm 0.1 random True      # Eval a model trained from scratch (with hyperparameter search)
 ```
 **NOTE**: If you want to evaluate a model after hyperparameter tuning, locate the best model in the training logs and keep only its folder in `/YOUR_PATH/tune/`. Alternatively, you can change `eval.py` to automatically load the best checkpoint.
+
+## 🔧 Advanced Usage
+
+For advanced configuration, custom training modes, hyperparameter tuning, and performance optimization, see the [Technical Guide](TECHNICAL_GUIDE.md).
+
+For understanding the complete data processing pipeline and model architecture, see the [Architecture Overview](ARCHITECTURE.md) and [Data Flow Documentation](DATA_FLOW.md).
+
+## 🎯 Key Features
+
+- **🔄 Multimodal Learning**: Simultaneous processing of neural spikes, LFP, and behavioral data
+- **🎭 Multi-Task Masking**: Novel strategy enabling both encoding and decoding in one model
+- **🧩 Session Stitching**: Handles variable neuron counts across different recording sessions
+- **⚡ Scalable Architecture**: From single sessions to 70+ session training
+- **🌐 Cross-Session Generalization**: Models generalize to unseen experimental sessions
 
 
 ## Citation

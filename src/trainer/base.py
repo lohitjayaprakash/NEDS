@@ -169,6 +169,9 @@ class MultiModalTrainer():
         for mod in self.modal_filter["output"]:
             if mod in self.STATIC_VARS:
                 continue
+            # Skip modalities that don't have data in evaluation results
+            if mod not in eval_epoch_results["eval_gt"][0]:
+                continue
             gt_pred_fig = self.plot_epoch(
                 gt=eval_epoch_results["eval_gt"][0][mod], 
                 preds=eval_epoch_results["eval_preds"][0][mod], 
@@ -458,6 +461,7 @@ class MultiModalTrainer():
                     _preds = torch.cat(session_results[eid][mod]["preds"], dim=0)
                 except:
                     print(f"Missing EID {idx}: {eid} Modality: {mod}")
+                    continue  # Skip this modality if data is missing
                 if mod == "spike" and "spike" in self.modal_filter["output"]:
                     _preds = torch.exp(_preds)
                 gt[idx][mod], preds[idx][mod] = _gt, _preds
@@ -466,6 +470,10 @@ class MultiModalTrainer():
                 self.session_active_neurons[eid] = {}
                 
             for mod in self.modal_filter["output"]:
+                # Only process modalities that have valid data
+                if mod not in gt[idx]:
+                    continue
+                    
                 if mod == "spike":
                     self.session_active_neurons[eid][mod] = np.arange(gt[idx][mod].shape[-1]).tolist()
                     results = metrics_list(

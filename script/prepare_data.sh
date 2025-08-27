@@ -14,7 +14,7 @@ echo $TMPDIR
 
 cd ..
 
-conda activate neds
+# conda activate neds
 
 num_sessions=${1:-1}  # Default to 1 if not provided
 eid=${2:-"None"}      # Default to "None" if not provided
@@ -42,6 +42,6 @@ python src/prepare_data.py --n_sessions $num_sessions \
                            --eid $eid \
                            --base_path $base_path
 
-conda deactivate
+# conda deactivate
 
 cd script

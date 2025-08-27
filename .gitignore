@@ -1,0 +1,13 @@
+
+/data
+/neds_env
+
+.vscode
+/neds_env_old
+
+/wandb
+
+# Python bytecode files
+
+# Python cache directories
+*/__pycache__/*

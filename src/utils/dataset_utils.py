@@ -196,15 +196,43 @@ def load_ibl_dataset(
     seed=42
 ):
 
+    print(f"DEBUG: load_ibl_dataset called with aligned_data_dir = {aligned_data_dir}")
+    
     if aligned_data_dir:
+        print(f"DEBUG: Using aligned data from {aligned_data_dir}")
         dataset = load_from_disk(aligned_data_dir)
         # if dataset does not have a 'train' key, it is a single session dataset
         if "train" not in dataset:
             _dataset = dataset.train_test_split(test_size=0.2, seed=seed)
             _dataset_train, _dataset_test = _dataset["train"], _dataset["test"]
             dataset = _dataset_train.train_test_split(test_size=0.1, seed=seed)
-            return dataset["train"], dataset["test"], _dataset_test
-        return dataset["train"], dataset["val"], dataset["test"]
+            train_dataset, val_dataset, test_dataset = dataset["train"], dataset["test"], _dataset_test
+        else:
+            train_dataset, val_dataset, test_dataset = dataset["train"], dataset["val"], dataset["test"]
+        
+        # Create metadata from the loaded dataset
+        # Get the first item to determine the structure
+        first_item = train_dataset[0]
+        # Extract neuron count from the actual data
+        if 'spikes_sparse_shape' in first_item and isinstance(first_item['spikes_sparse_shape'], list):
+            # For sparse format from disk
+            num_neurons = first_item['spikes_sparse_shape'][1] 
+        elif 'spikes_data' in first_item and hasattr(first_item['spikes_data'], 'shape'):
+            # For direct numpy arrays
+            num_neurons = first_item['spikes_data'].shape[1]
+        elif 'spike' in first_item:
+            num_neurons = len(first_item.get('spike', []))
+        else:
+            num_neurons = 0  # Default if we can't determine
+        
+        meta_data = {
+            "num_neurons": [num_neurons],
+            "num_sessions": 1,
+            "eids": [eid] if eid else [],
+            "eid_list": {eid: num_neurons} if eid else {}
+        }
+        
+        return train_dataset, val_dataset, test_dataset, meta_data
     
     user_datasets = get_user_datasets(user_or_org_name)
     print("Total session-wise datasets found: ", len(user_datasets))
